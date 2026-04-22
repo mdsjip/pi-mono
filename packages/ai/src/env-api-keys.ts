@@ -25,6 +25,39 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
 
 import type { KnownProvider } from "./types.js";
 
+let _procEnvCache: Map<string, string> | null = null;
+
+/**
+ * Fallback for https://github.com/oven-sh/bun/issues/27802
+ * Bun compiled binaries have an empty `process.env` inside sandbox
+ * environments on Linux. We can recover the env from `/proc/self/environ`.
+ */
+function getProcEnv(key: string): string | undefined {
+	if (!process.versions?.bun) return undefined;
+	if (typeof process === "undefined") return undefined;
+
+	// If process.env already has entries, the bug is not triggered.
+	if (Object.keys(process.env).length > 0) return undefined;
+
+	if (_procEnvCache === null) {
+		_procEnvCache = new Map();
+		try {
+			const { readFileSync } = require("node:fs") as typeof import("node:fs");
+			const data = readFileSync("/proc/self/environ", "utf-8");
+			for (const entry of data.split("\0")) {
+				const idx = entry.indexOf("=");
+				if (idx > 0) {
+					_procEnvCache.set(entry.slice(0, idx), entry.slice(idx + 1));
+				}
+			}
+		} catch {
+			// /proc/self/environ may not be readable.
+		}
+	}
+
+	return _procEnvCache.get(key);
+}
+
 let cachedVertexAdcCredentialsExists: boolean | null = null;
 
 function hasVertexAdcCredentials(): boolean {
@@ -65,24 +98,41 @@ export function getEnvApiKey(provider: string): string | undefined;
 export function getEnvApiKey(provider: any): string | undefined {
 	// Fall back to environment variables
 	if (provider === "github-copilot") {
-		return process.env.COPILOT_GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+		return (
+			process.env.COPILOT_GITHUB_TOKEN ||
+			process.env.GH_TOKEN ||
+			process.env.GITHUB_TOKEN ||
+			getProcEnv("COPILOT_GITHUB_TOKEN") ||
+			getProcEnv("GH_TOKEN") ||
+			getProcEnv("GITHUB_TOKEN")
+		);
 	}
 
 	// ANTHROPIC_OAUTH_TOKEN takes precedence over ANTHROPIC_API_KEY
 	if (provider === "anthropic") {
-		return process.env.ANTHROPIC_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY;
+		return (
+			process.env.ANTHROPIC_OAUTH_TOKEN ||
+			process.env.ANTHROPIC_API_KEY ||
+			getProcEnv("ANTHROPIC_OAUTH_TOKEN") ||
+			getProcEnv("ANTHROPIC_API_KEY")
+		);
 	}
 
 	// Vertex AI supports either an explicit API key or Application Default Credentials
 	// Auth is configured via `gcloud auth application-default login`
 	if (provider === "google-vertex") {
-		if (process.env.GOOGLE_CLOUD_API_KEY) {
-			return process.env.GOOGLE_CLOUD_API_KEY;
+		if (process.env.GOOGLE_CLOUD_API_KEY || getProcEnv("GOOGLE_CLOUD_API_KEY")) {
+			return process.env.GOOGLE_CLOUD_API_KEY || getProcEnv("GOOGLE_CLOUD_API_KEY");
 		}
 
 		const hasCredentials = hasVertexAdcCredentials();
-		const hasProject = !!(process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT);
-		const hasLocation = !!process.env.GOOGLE_CLOUD_LOCATION;
+		const hasProject = !!(
+			process.env.GOOGLE_CLOUD_PROJECT ||
+			process.env.GCLOUD_PROJECT ||
+			getProcEnv("GOOGLE_CLOUD_PROJECT") ||
+			getProcEnv("GCLOUD_PROJECT")
+		);
+		const hasLocation = !!(process.env.GOOGLE_CLOUD_LOCATION || getProcEnv("GOOGLE_CLOUD_LOCATION"));
 
 		if (hasCredentials && hasProject && hasLocation) {
 			return "<authenticated>";
@@ -103,7 +153,13 @@ export function getEnvApiKey(provider: any): string | undefined {
 			process.env.AWS_BEARER_TOKEN_BEDROCK ||
 			process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI ||
 			process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI ||
-			process.env.AWS_WEB_IDENTITY_TOKEN_FILE
+			process.env.AWS_WEB_IDENTITY_TOKEN_FILE ||
+			getProcEnv("AWS_PROFILE") ||
+			(getProcEnv("AWS_ACCESS_KEY_ID") && getProcEnv("AWS_SECRET_ACCESS_KEY")) ||
+			getProcEnv("AWS_BEARER_TOKEN_BEDROCK") ||
+			getProcEnv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") ||
+			getProcEnv("AWS_CONTAINER_CREDENTIALS_FULL_URI") ||
+			getProcEnv("AWS_WEB_IDENTITY_TOKEN_FILE")
 		) {
 			return "<authenticated>";
 		}
@@ -130,5 +186,6 @@ export function getEnvApiKey(provider: any): string | undefined {
 	};
 
 	const envVar = envMap[provider];
-	return envVar ? process.env[envVar] : undefined;
+	if (!envVar) return undefined;
+	return process.env[envVar] || getProcEnv(envVar);
 }

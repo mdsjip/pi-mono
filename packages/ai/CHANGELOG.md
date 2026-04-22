@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `getEnvApiKey()` to fall back to reading `/proc/self/environ` on Linux when `process.env` is empty inside a Bun sandbox, restoring API key detection for providers that rely on environment variables
+
 ## [0.69.0] - 2026-04-22
 
 ### Breaking Changes

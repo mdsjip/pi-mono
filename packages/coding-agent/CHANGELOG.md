@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed Bun compiled binaries running inside sandbox environments (e.g. nono) having an empty `process.env` by restoring environment variables from `/proc/self/environ` on Linux before any code reads them
 - Fixed `ctx.ui.setWorkingMessage()` to persist across loader recreation, matching the behavior of `ctx.ui.setWorkingIndicator()` ([#3566](https://github.com/badlogic/pi-mono/issues/3566))
 - Fixed coding-agent `fs.watch` error handling for theme and git-footer watchers to retry after transient watcher failures such as `EMFILE`, avoiding startup crashes in large repos ([#3564](https://github.com/badlogic/pi-mono/issues/3564))
 
